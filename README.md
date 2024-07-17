@@ -10,3 +10,5 @@
 6. Update /pipeline
 7. Update main.py
 8. Update app.py
+
+URL: 730335571176.dkr.ecr.us-west-1.amazonaws.com/textsummarizer
