@@ -1,80 +1,116 @@
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-from datasets import load_dataset, load_from_disk, load_metric
-import torch
+import json
+from pathlib import Path
+from typing import Dict, Optional
+
 import pandas as pd
+import torch
+from datasets import load_from_disk, load_metric
 from tqdm import tqdm
-from textSummarizer.entity import ModelEvaluationConfig
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-
+from textSummarizer.entity import ExperimentTrackingConfig, ModelEvaluationConfig
+from textSummarizer.logging import logger
+from textSummarizer.utils.tracking import ExperimentTracker
 
 
 class ModelEvaluation:
-    def __init__(self, config: ModelEvaluationConfig):
+    def __init__(self, config: ModelEvaluationConfig, tracking_config: Optional[ExperimentTrackingConfig] = None):
         self.config = config
+        self.tracker = ExperimentTracker(tracking_config) if tracking_config else ExperimentTracker(
+            ExperimentTrackingConfig(
+                enabled=False,
+                backend="local",
+                project=None,
+                entity=None,
+                run_name="evaluation",
+                tags=(),
+                mode=None,
+                root_dir=config.root_dir,
+                dataset_id=config.dataset_id,
+            )
+        )
 
+    def _generate_batches(self, items, batch_size: int):
+        for index in range(0, len(items), batch_size):
+            yield items[index : index + batch_size]
 
-    
-    def generate_batch_sized_chunks(self,list_of_elements, batch_size):
-        """split the dataset into smaller batches that we can process simultaneously
-        Yield successive batch-sized chunks from list_of_elements."""
-        for i in range(0, len(list_of_elements), batch_size):
-            yield list_of_elements[i : i + batch_size]
+    def _calculate_metrics(
+        self,
+        dataset_split,
+        model,
+        tokenizer,
+        batch_size: int = 8,
+    ) -> Dict[str, float]:
+        metric = load_metric("rouge")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model.to(device)
+        input_column = self.config.input_column
+        target_column = self.config.target_column
+        generation_kwargs = dict(self.config.generation_kwargs)
 
-    
-    def calculate_metric_on_test_ds(self,dataset, metric, model, tokenizer, 
-                               batch_size=16, device="cuda" if torch.cuda.is_available() else "cpu", 
-                               column_text="article", 
-                               column_summary="highlights"):
-        article_batches = list(self.generate_batch_sized_chunks(dataset[column_text], batch_size))
-        target_batches = list(self.generate_batch_sized_chunks(dataset[column_summary], batch_size))
+        article_batches = list(self._generate_batches(dataset_split[input_column], batch_size))
+        target_batches = list(self._generate_batches(dataset_split[target_column], batch_size))
 
         for article_batch, target_batch in tqdm(
-            zip(article_batches, target_batches), total=len(article_batches)):
-            
-            inputs = tokenizer(article_batch, max_length=1024,  truncation=True, 
-                            padding="max_length", return_tensors="pt")
-            
-            summaries = model.generate(input_ids=inputs["input_ids"].to(device),
-                            attention_mask=inputs["attention_mask"].to(device), 
-                            length_penalty=0.8, num_beams=8, max_length=128)
-            ''' parameter for length penalty ensures that the model does not generate sequences that are too long. '''
-            
-            # Finally, we decode the generated texts, 
-            # replace the  token, and add the decoded texts with the references to the metric.
-            decoded_summaries = [tokenizer.decode(s, skip_special_tokens=True, 
-                                    clean_up_tokenization_spaces=True) 
-                for s in summaries]      
-            
-            decoded_summaries = [d.replace("", " ") for d in decoded_summaries]
-            
-            
-            metric.add_batch(predictions=decoded_summaries, references=target_batch)
-            
-        #  Finally compute and return the ROUGE scores.
-        score = metric.compute()
-        return score
-
-
-    def evaluate(self):
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        tokenizer = AutoTokenizer.from_pretrained(self.config.tokenizer_path)
-        model_pegasus = AutoModelForSeq2SeqLM.from_pretrained(self.config.model_path).to(device)
-       
-        #loading data 
-        dataset_samsum_pt = load_from_disk(self.config.data_path)
-
-
-        rouge_names = ["rouge1", "rouge2", "rougeL", "rougeLsum"]
-  
-        rouge_metric = load_metric('rouge')
-
-        score = self.calculate_metric_on_test_ds(
-        dataset_samsum_pt['test'][0:10], rouge_metric, model_pegasus, tokenizer, batch_size = 2, column_text = 'dialogue', column_summary= 'summary'
+            zip(article_batches, target_batches),
+            total=len(article_batches),
+            desc="Evaluating",
+        ):
+            inputs = tokenizer(
+                article_batch,
+                max_length=self.config.input_max_length,
+                truncation=True,
+                padding="max_length",
+                return_tensors="pt",
             )
+            summaries = model.generate(
+                input_ids=inputs["input_ids"].to(device),
+                attention_mask=inputs["attention_mask"].to(device),
+                **generation_kwargs,
+            )
+            decoded = [
+                tokenizer.decode(summary, skip_special_tokens=True, clean_up_tokenization_spaces=True)
+                for summary in summaries
+            ]
+            metric.add_batch(predictions=decoded, references=target_batch)
 
-        rouge_dict = dict((rn, score[rn].mid.fmeasure ) for rn in rouge_names )
+        scores = metric.compute()
+        rouge_scores = {}
+        for name in self.config.metric_names:
+            score = scores[name]
+            rouge_scores[name] = score.mid.fmeasure if hasattr(score, "mid") else score
+        return rouge_scores
 
-        df = pd.DataFrame(rouge_dict, index = ['pegasus'] )
-        df.to_csv(self.config.metric_file_name, index=False)
+    def evaluate(self, batch_size: int = 8) -> Dict[str, float]:
+        logger.info("Starting model evaluation for dataset '%s'", self.config.dataset_id)
+        tokenizer = AutoTokenizer.from_pretrained(self.config.tokenizer_path)
+        model = AutoModelForSeq2SeqLM.from_pretrained(self.config.model_path)
+        dataset = load_from_disk(self.config.data_path)
+        test_split = dataset[self.config.splits.get("test", "test")]
+        if self.config.sample_size:
+            limit = min(int(self.config.sample_size), len(test_split))
+            logger.info("Subsampling evaluation dataset to %s examples", limit)
+            test_split = test_split.select(range(limit))
 
-        
+        self.tracker.start_run({
+            "dataset_id": self.config.dataset_id,
+            "model_path": str(self.config.model_path),
+        })
+        self.tracker.log_params({
+            "evaluation_sample_size": len(test_split),
+            "generation_kwargs": self.config.generation_kwargs,
+        })
+
+        try:
+            rouge_scores = self._calculate_metrics(test_split, model, tokenizer, batch_size=batch_size)
+            metrics_path = Path(self.config.metric_file_name)
+            metrics_path.parent.mkdir(parents=True, exist_ok=True)
+            df = pd.DataFrame([rouge_scores])
+            df.to_csv(metrics_path, index=False)
+            with open(metrics_path.with_suffix(".json"), "w", encoding="utf-8") as file:
+                json.dump({"dataset_id": self.config.dataset_id, "metrics": rouge_scores}, file, indent=2)
+            logger.info("Evaluation metrics written to %s", metrics_path)
+            self.tracker.log_metrics({f"evaluation/{k}": v for k, v in rouge_scores.items()})
+            return rouge_scores
+        finally:
+            self.tracker.finish()

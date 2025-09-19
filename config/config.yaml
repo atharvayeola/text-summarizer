@@ -1,33 +1,68 @@
 artifacts_root: artifacts
-
+default_dataset: samsum
 
 data_ingestion:
   root_dir: artifacts/data_ingestion
-  source_URL: https://github.com/atharvayeola/text-summarizer/raw/main/data/summarizer-data.zip
-  local_data_file: artifacts/data_ingestion/data.zip
-  unzip_dir: artifacts/data_ingestion
-
 
 data_validation:
   root_dir: artifacts/data_validation
-  STATUS_FILE: artifacts/data_validation/status.txt
-  ALL_REQUIRED_FILES: ["train", "test", "validation"]
-
+  status_file_name: status.txt
+  required_splits: ["train", "validation", "test"]
 
 data_transformation:
   root_dir: artifacts/data_transformation
-  data_path: artifacts/data_ingestion/samsum_dataset
   tokenizer_name: google/pegasus-cnn_dailymail
 
-  
 model_trainer:
   root_dir: artifacts/model_trainer
-  data_path: artifacts/data_transformation/samsum_dataset
   model_ckpt: google/pegasus-cnn_dailymail
 
 model_evaluation:
   root_dir: artifacts/model_evaluation
-  data_path: artifacts/data_transformation/samsum_dataset
-  model_path: artifacts/model_trainer/pegasus-samsum-model
-  tokenizer_path: artifacts/model_trainer/tokenizer
-  metric_file_name: artifacts/model_evaluation/metrics.csv
+  generation:
+    length_penalty: 0.8
+    num_beams: 8
+    max_length: 128
+    min_length: 12
+  metrics:
+    sample_size: 50
+    names: ["rouge1", "rouge2", "rougeL", "rougeLsum"]
+
+experiment_tracking:
+  root_dir: artifacts/experiments
+
+datasets:
+  samsum:
+    description: "Dialogues summarization dataset from Samsum."
+    ingestion:
+      type: zip
+      source_url: https://github.com/atharvayeola/text-summarizer/raw/main/data/summarizer-data.zip
+      archive_filename: samsum.zip
+      extracted_folder_name: samsum_dataset
+    columns:
+      input_text: dialogue
+      target_text: summary
+    splits:
+      train: train
+      validation: validation
+      test: test
+    max_input_length: 1024
+    max_target_length: 128
+    preprocessing_fn:
+
+  cnn_dailymail:
+    description: "News summarization dataset from CNN/DailyMail (via Hugging Face)."
+    ingestion:
+      type: huggingface
+      dataset_name: cnn_dailymail
+      subset: 3.0.0
+    columns:
+      input_text: article
+      target_text: highlights
+    splits:
+      train: train
+      validation: validation
+      test: test
+    max_input_length: 1024
+    max_target_length: 128
+    preprocessing_fn:
