@@ -1,59 +1,47 @@
-from textSummarizer.pipeline.stage1_data_ingestion import DataIngestionTrainingPipeline
-from textSummarizer.pipeline.stage2_data_validation import DataValidationTrainingPipeline
-from textSummarizer.pipeline.stage3_data_transformation import DataTransformationTrainingPipeline
-from textSummarizer.pipeline.stage4_model_trainer import ModelTrainerTrainingPipeline
-from textSummarizer.pipeline.stage5_model_evaluation import ModelEvaluationTrainingPipeline
+import argparse
+
 from textSummarizer.logging import logger
-
-STAGE_NAME = "Data Ingestion stage"
-try:
-   logger.info(f">>>>>> stage {STAGE_NAME} started <<<<<<") 
-   data_ingestion = DataIngestionTrainingPipeline()
-   data_ingestion.main()
-   logger.info(f">>>>>> stage {STAGE_NAME} completed <<<<<<\n\nx==========x")
-except Exception as e:
-        logger.exception(e)
-        raise e
+from textSummarizer.pipeline.training import run_training_pipeline
 
 
-STAGE_NAME = "Data Validation stage"
-try:
-   logger.info(f">>>>>> stage {STAGE_NAME} started <<<<<<") 
-   data_validation = DataValidationTrainingPipeline()
-   data_validation.main()
-   logger.info(f">>>>>> stage {STAGE_NAME} completed <<<<<<\n\nx==========x")
-except Exception as e:
-        logger.exception(e)
-        raise e
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the text summarization training pipeline.")
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default=None,
+        help="Dataset identifier defined in config/config.yaml (defaults to config.default_dataset).",
+    )
+    parser.add_argument(
+        "--hyperparameter-search",
+        action="store_true",
+        help="Enable hyperparameter search using the configured backend.",
+    )
+    parser.add_argument(
+        "--sweep-trials",
+        type=int,
+        default=None,
+        help="Override the number of hyperparameter search trials.",
+    )
+    parser.add_argument(
+        "--experiment-name",
+        type=str,
+        default=None,
+        help="Optional experiment/run name used for tracking artifacts.",
+    )
+    return parser.parse_args()
 
-STAGE_NAME = "Data Transformation stage"
-try:
-   logger.info(f">>>>>> stage {STAGE_NAME} started <<<<<<") 
-   data_transformation = DataTransformationTrainingPipeline()
-   data_transformation.main()
-   logger.info(f">>>>>> stage {STAGE_NAME} completed <<<<<<\n\nx==========x")
-except Exception as e:
-        logger.exception(e)
-        raise e
 
-STAGE_NAME = "Model Trainer stage"
-try: 
-   logger.info(f"*******************")
-   logger.info(f">>>>>> stage {STAGE_NAME} started <<<<<<")
-   model_trainer = ModelTrainerTrainingPipeline()
-   model_trainer.main()
-   logger.info(f">>>>>> stage {STAGE_NAME} completed <<<<<<\n\nx==========x")
-except Exception as e:
-        logger.exception(e)
-        raise e
+def main() -> None:
+    args = parse_args()
+    logger.info("CLI arguments: %s", args)
+    run_training_pipeline(
+        dataset_id=args.dataset,
+        enable_hyperparameter_search=args.hyperparameter_search,
+        hyperparameter_trials=args.sweep_trials,
+        experiment_name=args.experiment_name,
+    )
 
-STAGE_NAME = "Model Evaluation stage"
-try: 
-   logger.info(f"*******************")
-   logger.info(f">>>>>> stage {STAGE_NAME} started <<<<<<")
-   model_evaluation = ModelEvaluationTrainingPipeline()
-   model_evaluation.main()
-   logger.info(f">>>>>> stage {STAGE_NAME} completed <<<<<<\n\nx==========x")
-except Exception as e:
-        logger.exception(e)
-        raise e
+
+if __name__ == "__main__":
+    main()

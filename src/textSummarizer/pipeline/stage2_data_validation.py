@@ -1,14 +1,16 @@
-from textSummarizer.config.configuration import ConfigurationManager
 from textSummarizer.components.data_validation import DataValidation
+from textSummarizer.config.configuration import ConfigurationManager
 from textSummarizer.logging import logger
 
 
 class DataValidationTrainingPipeline:
-    def __init__(self):
-        pass
+    def __init__(self, configuration: ConfigurationManager):
+        self.configuration = configuration
 
-    def main(self):
-        config = ConfigurationManager()
-        data_validation_config = config.get_data_validation_config()
-        data_validation = DataValidation(config=data_validation_config)
-        data_validation.validate_all_files_exist()
+    def main(self) -> None:
+        validation_config = self.configuration.get_data_validation_config()
+        validator = DataValidation(config=validation_config)
+        status = validator.validate_all_files_exist()
+        if not status:
+            raise RuntimeError("Data validation failed. Please ensure all required splits are available.")
+        logger.info("Data validation successful for dataset '%s'", validation_config.dataset_id)
